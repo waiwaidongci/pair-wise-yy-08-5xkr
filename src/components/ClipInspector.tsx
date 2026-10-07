@@ -1,10 +1,13 @@
 import {
+  CallMerge,
   ContentCopy,
   DeleteOutline,
   GraphicEq,
+  Mic,
   Tune,
 } from '@mui/icons-material';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -12,6 +15,7 @@ import {
   FormControl,
   InputLabel,
   MenuItem,
+  RadioGroup,
   Select,
   Slider,
   Stack,
@@ -19,7 +23,12 @@ import {
 } from '@mui/material';
 import { useMemo } from 'react';
 import { useStudioStore } from '../stores/studioStore';
-import type { ClipEffect } from '../types/audio';
+import type { AudioAsset, ClipEffect, ClipTake } from '../types/audio';
+import { activeTakeOf, clipTakes } from '../utils/takes';
+
+function formatTime(value: number): string {
+  return `${value.toFixed(2)}s`;
+}
 
 export function ClipInspector() {
   const project = useStudioStore((state) => state.project);
@@ -28,6 +37,8 @@ export function ClipInspector() {
   const setClipEffect = useStudioStore((state) => state.setClipEffect);
   const duplicateClip = useStudioStore((state) => state.duplicateClip);
   const deleteClip = useStudioStore((state) => state.deleteClip);
+  const selectTake = useStudioStore((state) => state.selectTake);
+  const resolveConflict = useStudioStore((state) => state.resolveConflict);
 
   const selection = useMemo(() => {
     for (const track of project.tracks) {
@@ -36,6 +47,11 @@ export function ClipInspector() {
     }
     return null;
   }, [project.tracks, selectedClipId]);
+
+  const assetsById = useMemo(
+    () => new Map(project.assets.map((asset) => [asset.id, asset])),
+    [project.assets],
+  );
 
   if (!selection) {
     return (
@@ -46,14 +62,16 @@ export function ClipInspector() {
         <div className="inspector-empty">
           <GraphicEq />
           <strong>选择一个音频片段</strong>
-          <span>裁剪、淡入淡出、效果器和基础混音参数会显示在这里。</span>
+          <span>take 重选、裁剪、淡入淡出、效果器和基础混音参数会显示在这里。</span>
         </div>
       </aside>
     );
   }
 
   const { track, clip } = selection;
-  const asset = project.assets.find((item) => item.id === clip.assetId);
+  const takes = clipTakes(clip);
+  const activeTake = activeTakeOf(clip);
+  const asset = assetsById.get(activeTake.assetId);
 
   const update = (patch: Parameters<typeof setClip>[2]) => {
     setClip(track.id, clip.id, patch);
@@ -66,21 +84,80 @@ export function ClipInspector() {
           <Typography variant="subtitle2">片段检查器</Typography>
           <Typography variant="caption" color="text.secondary">{track.name}</Typography>
         </div>
-        <Chip
-          size="small"
-          label={clip.effect === 'none' ? '干声' : clip.effect.toUpperCase()}
-          color={clip.effect === 'none' ? 'default' : 'primary'}
-        />
+        <Stack direction="row" spacing={0.5}>
+          {clip.conflict && <Chip size="small" color="error" label="冲突" />}
+          <Chip size="small" label={`rev ${clip.revision ?? 1}`} variant="outlined" />
+          <Chip
+            size="small"
+            label={clip.effect === 'none' ? '干声' : clip.effect.toUpperCase()}
+            color={clip.effect === 'none' ? 'default' : 'primary'}
+          />
+        </Stack>
       </div>
+
+      {clip.conflict && (
+        <Alert severity="error" className="conflict-alert" icon={<CallMerge fontSize="small" />}>
+          <Typography variant="caption" display="block">
+            两个页签都修改了这个片段，已保留本地版本并记下对方取值。
+          </Typography>
+          <ConflictDetails clip={clip} assetsById={assetsById} />
+          <Stack direction="row" spacing={1} mt={0.5}>
+            <Button
+              size="small"
+              variant="contained"
+              color="primary"
+              onClick={() => resolveConflict(track.id, clip.id, 'local')}
+            >
+              保留本地
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              onClick={() => resolveConflict(track.id, clip.id, 'remote')}
+            >
+              采用对方
+            </Button>
+          </Stack>
+        </Alert>
+      )}
 
       <Box className="clip-summary" style={{ borderColor: track.color }}>
         <span style={{ background: track.color }} />
         <div>
           <strong>{clip.name}</strong>
-          <small>{asset?.name ?? '未知素材'} · {asset?.duration.toFixed(2) ?? '--'}s</small>
+          <small>
+            {asset?.name ?? '未知素材'} · take {activeTake.no}/{takes.length} · {asset?.duration.toFixed(2) ?? '--'}s
+          </small>
         </div>
       </Box>
 
+      <Divider />
+      <div className="inspector-section">
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Mic fontSize="small" color="error" />
+          <Typography className="section-label" variant="caption">Take 叠录（主轨只引用选中段落）</Typography>
+        </Stack>
+        <RadioGroup
+          className="take-list"
+          value={activeTake.no}
+          onChange={(event) => selectTake(track.id, clip.id, Number(event.target.value))}
+        >
+          {takes.map((item) => (
+            <TakeOption
+              key={`${item.no}-${item.assetId}`}
+              item={item}
+              takeAsset={assetsById.get(item.assetId)}
+              selected={item.no === activeTake.no}
+            />
+          ))}
+        </RadioGroup>
+        <Typography variant="caption" color="text.secondary">
+          原 take 不会被覆盖，随时可重选；新补录会自动成为当前 take。
+        </Typography>
+      </div>
+
+      <Divider />
       <div className="inspector-section">
         <Typography className="section-label" variant="caption">时间位置</Typography>
         <Stack spacing={1.4}>
@@ -102,7 +179,7 @@ export function ClipInspector() {
               min={project.snap}
               max={asset?.duration ?? 12}
               step={project.snap}
-              value={clip.duration}
+              value={Math.min(clip.duration, asset?.duration ?? clip.duration)}
               onChange={(_, value) => update({ duration: Number(value) })}
             />
           </label>
@@ -206,5 +283,60 @@ export function ClipInspector() {
         </Button>
       </Stack>
     </aside>
+  );
+}
+
+function TakeOption({
+  item,
+  takeAsset,
+  selected,
+}: {
+  item: ClipTake;
+  takeAsset?: AudioAsset;
+  selected: boolean;
+}) {
+  return (
+    <label className={`take-option ${selected ? 'take-option--active' : ''}`}>
+      <input type="radio" name={`take-${item.assetId}`} checked={selected} readOnly />
+      <span className="take-option__no">T{item.no}</span>
+      <span className="take-option__meta">
+        <strong>{takeAsset?.name ?? item.name}</strong>
+        <small>{takeAsset ? `${takeAsset.duration.toFixed(2)}s` : '声音缺失'}</small>
+      </span>
+      {selected && <Chip size="small" color="primary" label="主轨引用" />}
+    </label>
+  );
+}
+
+function ConflictDetails({
+  clip,
+  assetsById,
+}: {
+  clip: import('../types/audio').AudioClip;
+  assetsById: Map<string, AudioAsset>;
+}) {
+  const snapshot = clip.remoteSnapshot;
+  if (!snapshot) return null;
+  const remoteTake = clip.takes?.find((take) => take.id === snapshot.activeTakeId);
+  const rows: Array<[string, string, string]> = [];
+  if (snapshot.start !== undefined) rows.push(['开始', formatTime(clip.start), formatTime(snapshot.start)]);
+  if (snapshot.duration !== undefined) rows.push(['时长', formatTime(clip.duration), formatTime(snapshot.duration)]);
+  if (snapshot.offset !== undefined) rows.push(['偏移', formatTime(clip.offset), formatTime(snapshot.offset)]);
+  if (snapshot.fadeIn !== undefined) rows.push(['淡入', formatTime(clip.fadeIn), formatTime(snapshot.fadeIn)]);
+  if (snapshot.fadeOut !== undefined) rows.push(['淡出', formatTime(clip.fadeOut), formatTime(snapshot.fadeOut)]);
+  if (snapshot.effect !== undefined) rows.push(['效果', clip.effect, snapshot.effect]);
+  if (snapshot.effectAmount !== undefined) rows.push(['强度', `${clip.effectAmount}%`, `${snapshot.effectAmount}%`]);
+  return (
+    <Box className="conflict-table">
+      <div className="conflict-row conflict-row--head"><span>字段</span><span>本地</span><span>对方</span></div>
+      {rows.map(([label, local, remote]) => (
+        <div className="conflict-row" key={label}><span>{label}</span><span>{local}</span><span>{remote}</span></div>
+      ))}
+      {remoteTake && (
+        <Typography variant="caption" display="block" mt={0.5}>
+          对方选中 take {remoteTake.no}（{assetsById.get(remoteTake.assetId)?.name ?? '未知声音'}）
+        </Typography>
+      )}
+    </Box>
   );
 }

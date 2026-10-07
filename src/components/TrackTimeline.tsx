@@ -18,6 +18,7 @@ import {
 import { useMemo, useRef } from 'react';
 import { useStudioStore } from '../stores/studioStore';
 import type { AudioClip, AudioTrack } from '../types/audio';
+import { activeTakeOf, clipTakes } from '../utils/takes';
 import { WaveformClip } from './WaveformClip';
 
 interface DragState {
@@ -263,12 +264,14 @@ export function TrackTimeline() {
                     />
                   ))}
                   {track.clips.map((clip) => {
-                    const asset = project.assets.find((item) => item.id === clip.assetId);
+                    const activeTake = activeTakeOf(clip, project.assets);
+                    const asset = project.assets.find((item) => item.id === activeTake.assetId);
                     const selected = selectedClipId === clip.id;
+                    const totalTakes = clipTakes(clip).length;
                     return (
                       <Box
                         key={clip.id}
-                        className={`audio-clip ${selected ? 'audio-clip--selected' : ''}`}
+                        className={`audio-clip ${selected ? 'audio-clip--selected' : ''} ${clip.conflict ? 'audio-clip--conflict' : ''}`}
                         style={{
                           left: `${clip.start * pps}px`,
                           width: `${Math.max(20, clip.duration * pps)}px`,
@@ -283,6 +286,10 @@ export function TrackTimeline() {
                           <span>{clip.name}</span>
                           <small>{clip.duration.toFixed(2)}s</small>
                         </div>
+                        <span className="take-badge" title={`take ${activeTake.no} / 共 ${totalTakes} 条`}>
+                          T{activeTake.no}/{totalTakes}
+                        </span>
+                        {clip.conflict && <span className="conflict-badge">冲突</span>}
                         {asset && (
                           <WaveformClip
                             asset={asset}

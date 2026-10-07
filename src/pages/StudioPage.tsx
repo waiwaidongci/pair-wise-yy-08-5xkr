@@ -4,7 +4,7 @@ import {
   GraphicEq,
   Save,
 } from '@mui/icons-material';
-import { Alert, Button, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Button, Chip, Stack, TextField, Typography } from '@mui/material';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssetLibrary } from '../components/AssetLibrary';
 import { ClipInspector } from '../components/ClipInspector';
@@ -13,18 +13,56 @@ import { TransportBar } from '../components/TransportBar';
 import { useStudioStore } from '../stores/studioStore';
 import type { AudioProject } from '../types/audio';
 import { audioEngine } from '../utils/audioEngine';
+import { computeExportPlan, describePlan, rangeLabel } from '../utils/exportPlan';
+
+type Notice = { id: number; text: string; severity: 'info' | 'warning' | 'success' };
 
 export function StudioPage() {
   const project = useStudioStore((state) => state.project);
   const isPlaying = useStudioStore((state) => state.isPlaying);
   const playhead = useStudioStore((state) => state.playhead);
+  const pendingCount = useStudioStore((state) => state.pendingRecordings.length);
+  const conflictCount = useStudioStore((state) => (state.project.conflictClipIds ?? []).length);
+  const mergeNotice = useStudioStore((state) => state.mergeNotice);
+  const storageNotice = useStudioStore((state) => state.storageNotice);
   const setPlaying = useStudioStore((state) => state.setPlaying);
   const setPlayhead = useStudioStore((state) => state.setPlayhead);
   const setProjectName = useStudioStore((state) => state.setProjectName);
   const replaceProject = useStudioStore((state) => state.replaceProject);
+  const clearNotices = useStudioStore((state) => state.clearNotices);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const [recordingPulse, setRecordingPulse] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<Notice | null>(null);
+  const noticeId = useRef(0);
+
+  const pushNotice = (text: string, severity: Notice['severity'] = 'info') => {
+    noticeId.current += 1;
+    setMessage({ id: noticeId.current, text, severity });
+  };
+
+  // 导出预案：循环区间 / 片段边界 / take 引用任一变化 → 修订号变 → 签名变 → 自动重算。
+  const exportPlan = useMemo(() => computeExportPlan(project), [project]);
+  const acknowledgedSig = useRef<string | null>(null);
+  const [planRebuiltSig, setPlanRebuiltSig] = useState<string | null>(null);
+  useEffect(() => {
+    if (acknowledgedSig.current === null) {
+      acknowledgedSig.current = exportPlan.signature;
+      return;
+    }
+    if (acknowledgedSig.current !== exportPlan.signature) {
+      acknowledgedSig.current = exportPlan.signature;
+      setPlanRebuiltSig(exportPlan.signature);
+    }
+  }, [exportPlan.signature]);
+
+  // 来自 store 的容量 / 跨页签合并提示。
+  useEffect(() => {
+    if (storageNotice) pushNotice(storageNotice, 'warning');
+  }, [storageNotice]);
+  useEffect(() => {
+    if (mergeNotice) pushNotice(mergeNotice, conflictCount > 0 ? 'warning' : 'info');
+  }, [mergeNotice, conflictCount]);
+
   const mixKey = useMemo(
     () =>
       JSON.stringify(
@@ -36,6 +74,7 @@ export function StudioPage() {
           solo: track.solo,
           clips: track.clips.map((clip) => ({
             id: clip.id,
+            assetId: clip.assetId,
             start: clip.start,
             duration: clip.duration,
             offset: clip.offset,
@@ -64,7 +103,7 @@ export function StudioPage() {
       });
       setPlaying(true);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '音频播放初始化失败');
+      pushNotice(error instanceof Error ? error.message : '音频播放初始化失败', 'warning');
       setPlaying(false);
     }
   };
@@ -138,7 +177,10 @@ export function StudioPage() {
   );
 
   const saveProject = () => {
-    const content = JSON.stringify(project, null, 2);
+    // 导出工程同时附带当前导出预案，方便核对每个 take 段落的边界与修订号。
+    const payload: AudioProject & { exportPlan?: unknown } = { ...project };
+    payload.exportPlan = exportPlan;
+    const content = JSON.stringify(payload, null, 2);
     const blob = new Blob([content], { type: 'application/json;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -147,21 +189,40 @@ export function StudioPage() {
     anchor.click();
     URL.revokeObjectURL(url);
     useStudioStore.getState().markSaved();
-    setMessage('工程 JSON 已导出，轨道与效果参数可在其他浏览器中继续编辑。');
+    pushNotice(
+      `工程 JSON 已导出（含 ${exportPlan.clips.length} 段、签名 ${exportPlan.signature.slice(0, 8)} 的导出预案）。`,
+      'success',
+    );
+  };
+
+  const downloadPlanText = () => {
+    const blob = new Blob([describePlan(exportPlan, project)], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${project.name.replaceAll('/', '-')}-export-plan.txt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const importProject = async (file?: File) => {
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text()) as AudioProject;
-      if (parsed.version !== 1 || !Array.isArray(parsed.tracks) || !Array.isArray(parsed.assets)) {
-        throw new Error('不是有效的 WaveForge v1 工程文件');
+      if (!Array.isArray(parsed.tracks) || !Array.isArray(parsed.assets)) {
+        throw new Error('不是有效的 WaveForge 工程文件');
       }
       audioEngine.stop();
       replaceProject(parsed);
-      setMessage(`已载入工程：${parsed.name}`);
+      const wasLegacy = Number(parsed.version) < 2;
+      pushNotice(
+        wasLegacy
+          ? `已载入旧版工程「${parsed.name}」：take 编号已补齐（每段补为 take 1），升级到 v2 后才能继续编辑。`
+          : `已载入工程：${parsed.name}`,
+        wasLegacy ? 'warning' : 'success',
+      );
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '工程导入失败');
+      pushNotice(error instanceof Error ? error.message : '工程导入失败', 'warning');
     }
   };
 
@@ -180,8 +241,14 @@ export function StudioPage() {
           <Stack direction="row" alignItems="center" spacing={1}>
             <span className="autosave-dot" />
             <Typography variant="caption" color="text.secondary">
-              轨道和效果参数自动保存到 localStorage
+              take 叠录自动保存到 localStorage
             </Typography>
+            {conflictCount > 0 && (
+              <Chip size="small" color="error" label={`${conflictCount} 个合并冲突待处理`} />
+            )}
+            {pendingCount > 0 && (
+              <Chip size="small" color="warning" label={`${pendingCount} 份未保存录音`} />
+            )}
           </Stack>
         </div>
         <Stack direction="row" spacing={1}>
@@ -219,19 +286,45 @@ export function StudioPage() {
         onRecord={() => {
           setRecordingPulse(true);
           window.setTimeout(() => setRecordingPulse(false), 1200);
-          setMessage('录音入口位于左侧素材库，点击红色录音按钮即可开始。');
+          pushNotice('在左侧素材库点红色按钮：选中片段即“叠录新 take”，未选片段则新建。');
         }}
         onSaveProject={saveProject}
       />
 
       {message && (
-        <Alert severity="info" className="studio-message" onClose={() => setMessage(null)}>
-          {message}
+        <Alert
+          severity={message.severity}
+          className="studio-message"
+          onClose={() => setMessage(null)}
+        >
+          {message.text}
         </Alert>
       )}
 
+      <Stack className="export-plan-bar" direction="row" alignItems="center" spacing={1.5}>
+        <GraphicEq fontSize="small" color="action" />
+        <Typography variant="caption">
+          导出预案：区间 <b>{rangeLabel(exportPlan)}</b> · {exportPlan.clips.length} 个 take 段落
+        </Typography>
+        <Chip
+          size="small"
+          variant={planRebuiltSig ? 'filled' : 'outlined'}
+          color={planRebuiltSig ? 'secondary' : 'default'}
+          label={
+            planRebuiltSig
+              ? `已随边界变化重算 · ${exportPlan.signature.slice(0, 8)}`
+              : `签名 ${exportPlan.signature.slice(0, 8)}`
+          }
+        />
+        <Button size="small" variant="text" onClick={downloadPlanText}>下载预案</Button>
+        <span className="transport-spacer" />
+        {mergeNotice && (
+          <Button size="small" color="secondary" onClick={clearNotices}>知道了</Button>
+        )}
+      </Stack>
+
       <main className="studio-workspace">
-        <AssetLibrary />
+        <AssetLibrary onNotice={pushNotice} />
         <TrackTimeline />
         <ClipInspector />
       </main>
