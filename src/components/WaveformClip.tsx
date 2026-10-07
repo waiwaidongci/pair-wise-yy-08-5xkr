@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import type { AudioAsset, AudioClip } from '../types/audio';
+import { getActiveTake } from '../utils/takes';
 import { getSyntheticAssetUrl, isSyntheticAsset } from '../utils/syntheticAudio';
 
 interface WaveformClipProps {
@@ -12,6 +13,7 @@ interface WaveformClipProps {
 
 export function WaveformClip({ asset, clip, pixelsPerSecond, color }: WaveformClipProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const take = getActiveTake(clip);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -48,7 +50,8 @@ export function WaveformClip({ asset, clip, pixelsPerSecond, color }: WaveformCl
       disposed = true;
       wavesurfer.destroy();
     };
-  }, [asset.dataUrl, asset.id, clip.offset, color, pixelsPerSecond]);
+    // waveformEpoch 变化时强制重绘，覆盖循环区间或片段边界受牵连的波形
+  }, [asset.dataUrl, asset.id, take.offset, color, pixelsPerSecond, clip.waveformEpoch]);
 
   return (
     <div className="waveform-clip" aria-label={`${clip.name} 波形`}>
@@ -57,7 +60,7 @@ export function WaveformClip({ asset, clip, pixelsPerSecond, color }: WaveformCl
         ref={containerRef}
         style={{
           width: `${Math.max(20, asset.duration * pixelsPerSecond)}px`,
-          transform: `translateX(${-clip.offset * pixelsPerSecond}px)`,
+          transform: `translateX(${-take.offset * pixelsPerSecond}px)`,
         }}
       />
     </div>

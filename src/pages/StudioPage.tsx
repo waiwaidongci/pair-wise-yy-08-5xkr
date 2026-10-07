@@ -34,16 +34,19 @@ export function StudioPage() {
           pan: track.pan,
           muted: track.muted,
           solo: track.solo,
-          clips: track.clips.map((clip) => ({
-            id: clip.id,
-            start: clip.start,
-            duration: clip.duration,
-            offset: clip.offset,
-            fadeIn: clip.fadeIn,
-            fadeOut: clip.fadeOut,
-            effect: clip.effect,
-            amount: clip.effectAmount,
-          })),
+          clips: track.clips.map((clip) => {
+            const take = clip.takes.find((t) => t.id === clip.activeTakeId) ?? clip.takes[0];
+            return {
+              id: clip.id,
+              start: clip.start,
+              duration: take?.duration,
+              offset: take?.offset,
+              fadeIn: clip.fadeIn,
+              fadeOut: clip.fadeOut,
+              effect: clip.effect,
+              amount: clip.effectAmount,
+            };
+          }),
         })),
       ),
     [project.tracks],
@@ -154,8 +157,8 @@ export function StudioPage() {
     if (!file) return;
     try {
       const parsed = JSON.parse(await file.text()) as AudioProject;
-      if (parsed.version !== 1 || !Array.isArray(parsed.tracks) || !Array.isArray(parsed.assets)) {
-        throw new Error('不是有效的 WaveForge v1 工程文件');
+      if (![1, 2].includes(parsed.version) || !Array.isArray(parsed.tracks) || !Array.isArray(parsed.assets)) {
+        throw new Error('不是有效的 WaveForge 工程文件');
       }
       audioEngine.stop();
       replaceProject(parsed);

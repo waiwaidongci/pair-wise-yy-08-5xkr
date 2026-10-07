@@ -26,18 +26,27 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { useStudioStore } from '../stores/studioStore';
 import { SYNTHETIC_ASSETS } from '../utils/syntheticAudio';
+import { getActiveTake } from '../utils/takes';
 
 export function AssetLibrary() {
   const assets = useStudioStore((state) => state.project.assets);
   const selectedTrackId = useStudioStore((state) => state.selectedTrackId);
+  const selectedClipId = useStudioStore((state) => state.selectedClipId);
+  const project = useStudioStore((state) => state.project);
   const addClip = useStudioStore((state) => state.addClip);
   const importFile = useStudioStore((state) => state.importFile);
   const addRecordedBlob = useStudioStore((state) => state.addRecordedBlob);
+  const restoreTake = useStudioStore((state) => state.restoreTake);
+  const unsavedRecordings = useStudioStore((state) => state.unsavedRecordings);
+  const retryUnsavedRecording = useStudioStore((state) => state.retryUnsavedRecording);
+  const discardUnsavedRecording = useStudioStore((state) => state.discardUnsavedRecording);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const recordStartedAt = useRef(0);
+  /** 录音前片段的激活 take，录音失败时恢复 */
+  const previousTakeRef = useRef<{ trackId: string; clipId: string; takeId: string } | null>(null);
   const [recording, setRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -67,6 +76,16 @@ export function AssetLibrary() {
 
   const startRecording = async () => {
     setError(null);
+    // 录音前记录当前激活 take，失败时恢复
+    const track = project.tracks.find((t) => t.id === selectedTrackId);
+    const clip = track?.clips.find((c) => c.id === selectedClipId);
+    if (clip) {
+      const take = getActiveTake(clip);
+      previousTakeRef.current = { trackId: track!.id, clipId: clip.id, takeId: take.id };
+    } else {
+      previousTakeRef.current = null;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -77,12 +96,35 @@ export function AssetLibrary() {
       recorder.onstop = async () => {
         const duration = Math.max(0.2, (performance.now() - recordStartedAt.current) / 1000);
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        await addRecordedBlob(blob, duration);
+        const targetTrackId = previousTakeRef.current?.trackId ?? selectedTrackId;
+        const targetClipId = previousTakeRef.current?.clipId ?? null;
+        const result = await addRecordedBlob(blob, duration, targetTrackId, targetClipId);
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
         recorderRef.current = null;
         setRecording(false);
         setRecordSeconds(0);
+        if (!result.ok) {
+          setError(result.error ?? '录音保存失败');
+        }
+        previousTakeRef.current = null;
+      };
+      recorder.onerror = () => {
+        // 录音失败：恢复上一个 take
+        if (previousTakeRef.current) {
+          restoreTake(
+            previousTakeRef.current.trackId,
+            previousTakeRef.current.clipId,
+            previousTakeRef.current.takeId,
+          );
+        }
+        streamRef.current?.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        recorderRef.current = null;
+        setRecording(false);
+        setRecordSeconds(0);
+        setError('录音中断，已恢复上一个 take。');
+        previousTakeRef.current = null;
       };
       recorder.start(250);
       recorderRef.current = recorder;
@@ -92,6 +134,7 @@ export function AssetLibrary() {
       setRecording(true);
     } catch {
       setError('未获得麦克风权限，可使用内置合成音频或导入本地文件。');
+      previousTakeRef.current = null;
     }
   };
 
@@ -116,7 +159,7 @@ export function AssetLibrary() {
           <div>
             <Typography variant="body2" fontWeight={700}>录音输入</Typography>
             <Typography variant="caption" color="text.secondary">
-              添加为当前所选轨道的新片段
+              {selectedClipId ? '在所选片段上叠加 take' : '添加为新片段的 take'}
             </Typography>
           </div>
           <Tooltip title={recording ? '停止录音' : '开始录音'}>
@@ -136,6 +179,34 @@ export function AssetLibrary() {
           </div>
         )}
       </Stack>
+
+      {unsavedRecordings.length > 0 && (
+        <Alert severity="warning" className="unsaved-alert">
+          <Typography variant="body2" fontWeight={700}>
+            {unsavedRecordings.length} 段录音未保存
+          </Typography>
+          <Typography variant="caption" display="block" sx={{ mb: 1 }}>
+            素材库容量不足，新 take 已拒绝。可删除其他素材后重试。
+          </Typography>
+          <Stack spacing={0.5}>
+            {unsavedRecordings.map((item) => (
+              <Box key={item.id} className="unsaved-row">
+                <Mic fontSize="small" color="warning" />
+                <div className="unsaved-info">
+                  <strong>未保存录音</strong>
+                  <small>{item.duration.toFixed(1)}s · {new Date(item.recordedAt).toLocaleTimeString('zh-CN')}</small>
+                </div>
+                <Button size="small" onClick={() => void retryUnsavedRecording(item.id)}>
+                  重试
+                </Button>
+                <Button size="small" color="error" onClick={() => discardUnsavedRecording(item.id)}>
+                  丢弃
+                </Button>
+              </Box>
+            ))}
+          </Stack>
+        </Alert>
+      )}
 
       <Divider />
       <Typography className="library-label" variant="caption">内置合成片段</Typography>

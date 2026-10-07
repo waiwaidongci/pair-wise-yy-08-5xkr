@@ -2,9 +2,11 @@ import {
   ContentCopy,
   DeleteOutline,
   GraphicEq,
+  Mic,
   Tune,
 } from '@mui/icons-material';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -20,6 +22,7 @@ import {
 import { useMemo } from 'react';
 import { useStudioStore } from '../stores/studioStore';
 import type { ClipEffect } from '../types/audio';
+import { getActiveTake } from '../utils/takes';
 
 export function ClipInspector() {
   const project = useStudioStore((state) => state.project);
@@ -28,6 +31,9 @@ export function ClipInspector() {
   const setClipEffect = useStudioStore((state) => state.setClipEffect);
   const duplicateClip = useStudioStore((state) => state.duplicateClip);
   const deleteClip = useStudioStore((state) => state.deleteClip);
+  const setActiveTake = useStudioStore((state) => state.setActiveTake);
+  const deleteTake = useStudioStore((state) => state.deleteTake);
+  const resolveConflict = useStudioStore((state) => state.resolveConflict);
 
   const selection = useMemo(() => {
     for (const track of project.tracks) {
@@ -46,14 +52,15 @@ export function ClipInspector() {
         <div className="inspector-empty">
           <GraphicEq />
           <strong>选择一个音频片段</strong>
-          <span>裁剪、淡入淡出、效果器和基础混音参数会显示在这里。</span>
+          <span>裁剪、淡入淡出、效果器和 take 叠录会显示在这里。</span>
         </div>
       </aside>
     );
   }
 
   const { track, clip } = selection;
-  const asset = project.assets.find((item) => item.id === clip.assetId);
+  const take = getActiveTake(clip);
+  const asset = project.assets.find((item) => item.id === take.assetId);
 
   const update = (patch: Parameters<typeof setClip>[2]) => {
     setClip(track.id, clip.id, patch);
@@ -66,18 +73,21 @@ export function ClipInspector() {
           <Typography variant="subtitle2">片段检查器</Typography>
           <Typography variant="caption" color="text.secondary">{track.name}</Typography>
         </div>
-        <Chip
-          size="small"
-          label={clip.effect === 'none' ? '干声' : clip.effect.toUpperCase()}
-          color={clip.effect === 'none' ? 'default' : 'primary'}
-        />
+        <Stack direction="row" spacing={0.5}>
+          {clip.conflict && <Chip size="small" label="冲突" color="warning" />}
+          <Chip
+            size="small"
+            label={clip.effect === 'none' ? '干声' : clip.effect.toUpperCase()}
+            color={clip.effect === 'none' ? 'default' : 'primary'}
+          />
+        </Stack>
       </div>
 
       <Box className="clip-summary" style={{ borderColor: track.color }}>
         <span style={{ background: track.color }} />
         <div>
           <strong>{clip.name}</strong>
-          <small>{asset?.name ?? '未知素材'} · {asset?.duration.toFixed(2) ?? '--'}s</small>
+          <small>{asset?.name ?? '未知素材'} · {take.duration.toFixed(2)}s</small>
         </div>
       </Box>
 
@@ -96,28 +106,78 @@ export function ClipInspector() {
             />
           </label>
           <label>
-            <span>片段时长 <b>{clip.duration.toFixed(2)}s</b></span>
+            <span>片段时长 <b>{take.duration.toFixed(2)}s</b></span>
             <Slider
               size="small"
               min={project.snap}
               max={asset?.duration ?? 12}
               step={project.snap}
-              value={clip.duration}
+              value={take.duration}
               onChange={(_, value) => update({ duration: Number(value) })}
             />
           </label>
           <label>
-            <span>素材偏移 <b>{clip.offset.toFixed(2)}s</b></span>
+            <span>素材偏移 <b>{take.offset.toFixed(2)}s</b></span>
             <Slider
               size="small"
               min={0}
-              max={Math.max(0, (asset?.duration ?? clip.duration) - clip.duration)}
+              max={Math.max(0, (asset?.duration ?? take.duration) - take.duration)}
               step={0.01}
-              value={clip.offset}
+              value={take.offset}
               onChange={(_, value) => update({ offset: Number(value) })}
             />
           </label>
         </Stack>
+      </div>
+
+      <Divider />
+      <div className="inspector-section">
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <Mic fontSize="small" color="primary" />
+          <Typography className="section-label" variant="caption">Take 叠录</Typography>
+          <Chip size="small" label={`${clip.takes.length} 个 take`} />
+        </Stack>
+        <Stack spacing={0.6} className="take-list">
+          {clip.takes.map((item) => {
+            const itemAsset = project.assets.find((a) => a.id === item.assetId);
+            const active = item.id === take.id;
+            return (
+              <Box
+                key={item.id}
+                className={`take-row ${active ? 'take-row--active' : ''}`}
+                onClick={() => setActiveTake(track.id, clip.id, item.id)}
+              >
+                <span className="take-number">T{item.takeNumber}</span>
+                <div className="take-info">
+                  <strong>{item.name}</strong>
+                  <small>
+                    {itemAsset?.source === 'recorded' ? '录音' : itemAsset?.source === 'imported' ? '导入' : '合成'}
+                    {' · '}{item.duration.toFixed(2)}s
+                  </small>
+                </div>
+                {active && <Chip size="small" label="当前" color="primary" />}
+                {clip.takes.length > 1 && (
+                  <Button
+                    size="small"
+                    color="error"
+                    className="take-delete"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      deleteTake(track.id, clip.id, item.id);
+                    }}
+                  >
+                    删除
+                  </Button>
+                )}
+              </Box>
+            );
+          })}
+        </Stack>
+        {clip.conflict && (
+          <Alert severity="warning" className="take-conflict-alert">
+            多页签对该片段的修改存在冲突，已保留双方 take。选择一个 take 作为当前版本即可解除冲突。
+          </Alert>
+        )}
       </div>
 
       <Divider />
@@ -129,7 +189,7 @@ export function ClipInspector() {
             <Slider
               size="small"
               min={0}
-              max={Math.min(3, clip.duration / 2)}
+              max={Math.min(3, take.duration / 2)}
               step={0.01}
               value={clip.fadeIn}
               onChange={(_, value) => update({ fadeIn: Number(value) })}
@@ -140,7 +200,7 @@ export function ClipInspector() {
             <Slider
               size="small"
               min={0}
-              max={Math.min(3, clip.duration / 2)}
+              max={Math.min(3, take.duration / 2)}
               step={0.01}
               value={clip.fadeOut}
               onChange={(_, value) => update({ fadeOut: Number(value) })}

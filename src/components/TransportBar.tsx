@@ -22,7 +22,9 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import { useMemo } from 'react';
 import { useStudioStore } from '../stores/studioStore';
+import { estimateProjectSize, selectExportPlan, STORAGE_LIMIT } from '../utils/takes';
 
 interface TransportBarProps {
   recording: boolean;
@@ -48,6 +50,14 @@ export function TransportBar({
   const setZoom = useStudioStore((state) => state.setZoom);
   const addTrack = useStudioStore((state) => state.addTrack);
   const updateTransport = useStudioStore((state) => state.updateTransport);
+
+  const storageUsage = useMemo(() => {
+    const size = estimateProjectSize(project);
+    const percent = Math.round((size / STORAGE_LIMIT) * 100);
+    return { size, percent };
+  }, [project]);
+
+  const exportPlanCount = useMemo(() => selectExportPlan(project).length, [project]);
 
   return (
     <section className="transport-bar">
@@ -148,6 +158,23 @@ export function TransportBar({
       <Button startIcon={<Add />} variant="outlined" onClick={addTrack}>
         新增轨道
       </Button>
+      <Tooltip title={`导出预案：${exportPlanCount} 个片段的激活 take 将被导出`}>
+        <Chip
+          size="small"
+          label={`导出预案 ${exportPlanCount}`}
+          variant="outlined"
+          className="storage-chip"
+        />
+      </Tooltip>
+      <Tooltip title={`本地存储占用 ${storageUsage.percent}%（${(storageUsage.size / 1024 / 1024).toFixed(2)} MB / ${(STORAGE_LIMIT / 1024 / 1024).toFixed(0)} MB）`}>
+        <Chip
+          size="small"
+          label={`存储 ${storageUsage.percent}%`}
+          color={storageUsage.percent > 85 ? 'warning' : 'default'}
+          variant="outlined"
+          className="storage-chip"
+        />
+      </Tooltip>
       <Button startIcon={<Save />} onClick={onSaveProject}>
         保存工程
       </Button>

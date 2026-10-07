@@ -780,6 +780,125 @@ input {
   line-height: 1.7;
 }
 
+/* Take 叠录相关样式 */
+.take-badge {
+  height: 16px !important;
+  margin-left: 4px !important;
+  font-size: 9px !important;
+}
+
+.conflict-badge {
+  height: 16px !important;
+  margin-left: 4px !important;
+  font-size: 9px !important;
+}
+
+.audio-clip--conflict {
+  border-style: dashed !important;
+}
+
+.take-list {
+  gap: 4px !important;
+}
+
+.take-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e0e6ef;
+  border-radius: 6px;
+  background: #fafbfd;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+
+.take-row:hover {
+  background: #f0f5ff;
+}
+
+.take-row--active {
+  border-color: #1769ff;
+  background: #eef4ff;
+}
+
+.take-number {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  place-items: center;
+  border-radius: 6px;
+  background: #1769ff;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.take-row--active .take-number {
+  background: #0f9f7a;
+}
+
+.take-info {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.take-info strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.take-info small {
+  color: #758195;
+  font-size: 9px;
+}
+
+.take-delete {
+  min-width: auto !important;
+  padding: 2px 6px !important;
+  font-size: 10px !important;
+}
+
+.take-conflict-alert {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.unsaved-alert {
+  margin: 8px 0;
+  padding: 8px;
+}
+
+.unsaved-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.unsaved-info {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.unsaved-info strong {
+  font-size: 11px;
+}
+
+.unsaved-info small {
+  color: #758195;
+  font-size: 9px;
+}
+
+.storage-chip {
+  font-size: 10px !important;
+}
+
 .help-page {
   height: 100%;
   overflow: auto;

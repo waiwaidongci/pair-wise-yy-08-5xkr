@@ -18,6 +18,7 @@ import {
 import { useMemo, useRef } from 'react';
 import { useStudioStore } from '../stores/studioStore';
 import type { AudioClip, AudioTrack } from '../types/audio';
+import { getActiveTake } from '../utils/takes';
 import { WaveformClip } from './WaveformClip';
 
 interface DragState {
@@ -54,7 +55,10 @@ export function TrackTimeline() {
     const clipEnd = Math.max(
       0,
       ...project.tracks.flatMap((track) =>
-        track.clips.map((clip) => clip.start + clip.duration),
+        track.clips.map((clip) => {
+          const take = getActiveTake(clip);
+          return clip.start + (take?.duration ?? 0);
+        }),
       ),
     );
     return Math.max(20, Math.ceil(Math.max(clipEnd + 4, project.loopEnd + 4)));
@@ -117,19 +121,21 @@ export function TrackTimeline() {
       return;
     }
     if (drag.mode === 'trim-left') {
-      const maxDelta = drag.clip.duration - project.snap;
-      const delta = Math.min(maxDelta, Math.max(-drag.clip.offset, deltaSeconds));
+      const take = getActiveTake(drag.clip);
+      const maxDelta = take.duration - project.snap;
+      const delta = Math.min(maxDelta, Math.max(-take.offset, deltaSeconds));
       const next = {
         start: snapValue(drag.clip.start + delta, project.snap),
-        offset: Math.max(0, drag.clip.offset + delta),
-        duration: Math.max(project.snap, drag.clip.duration - delta),
+        offset: Math.max(0, take.offset + delta),
+        duration: Math.max(project.snap, take.duration - delta),
       };
       setClip(drag.lastTrackId, drag.clip.id, next);
       return;
     }
+    const take = getActiveTake(drag.clip);
     const nextDuration = Math.max(
       project.snap,
-      snapValue(drag.clip.duration + deltaSeconds, project.snap),
+      snapValue(take.duration + deltaSeconds, project.snap),
     );
     setClip(drag.lastTrackId, drag.clip.id, { duration: nextDuration });
   };
@@ -263,25 +269,36 @@ export function TrackTimeline() {
                     />
                   ))}
                   {track.clips.map((clip) => {
-                    const asset = project.assets.find((item) => item.id === clip.assetId);
+                    const take = getActiveTake(clip);
+                    const asset = project.assets.find((item) => item.id === take.assetId);
                     const selected = selectedClipId === clip.id;
                     return (
                       <Box
                         key={clip.id}
-                        className={`audio-clip ${selected ? 'audio-clip--selected' : ''}`}
+                        className={`audio-clip ${selected ? 'audio-clip--selected' : ''} ${clip.conflict ? 'audio-clip--conflict' : ''}`}
                         style={{
                           left: `${clip.start * pps}px`,
-                          width: `${Math.max(20, clip.duration * pps)}px`,
+                          width: `${Math.max(20, take.duration * pps)}px`,
                           top: `${(track.height - 82) / 2}px`,
                           background: `${track.color}22`,
-                          borderColor: selected ? track.color : `${track.color}99`,
+                          borderColor: clip.conflict ? '#d97706' : selected ? track.color : `${track.color}99`,
                         }}
                         onPointerDown={(event) => startDrag(event, track, clip, 'move')}
                       >
                         <div className="clip-title" title={clip.name}>
                           <GraphicEq fontSize="inherit" />
                           <span>{clip.name}</span>
-                          <small>{clip.duration.toFixed(2)}s</small>
+                          {clip.takes.length > 1 && (
+                            <Chip
+                              size="small"
+                              label={`T${take.takeNumber}/${clip.takes.length}`}
+                              className="take-badge"
+                            />
+                          )}
+                          {clip.conflict && (
+                            <Chip size="small" label="冲突" color="warning" className="conflict-badge" />
+                          )}
+                          <small>{take.duration.toFixed(2)}s</small>
                         </div>
                         {asset && (
                           <WaveformClip

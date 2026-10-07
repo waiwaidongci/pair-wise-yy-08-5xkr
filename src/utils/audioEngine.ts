@@ -1,4 +1,5 @@
 import type { AudioAsset, AudioProject, AudioTrack } from '../types/audio';
+import { getActiveTake } from './takes';
 import { createSyntheticBuffer, isSyntheticAsset } from './syntheticAudio';
 
 export class AudioEngine {
@@ -51,9 +52,11 @@ export class AudioEngine {
     for (const track of project.tracks) {
       if (!activeTrackIds.has(track.id)) continue;
       for (const clip of track.clips) {
-        const clipEnd = clip.start + clip.duration;
-        if (clipEnd <= from || clip.duration <= 0) continue;
-        const asset = project.assets.find((item) => item.id === clip.assetId);
+        const take = getActiveTake(clip);
+        if (!take) continue;
+        const clipEnd = clip.start + take.duration;
+        if (clipEnd <= from || take.duration <= 0) continue;
+        const asset = project.assets.find((item) => item.id === take.assetId);
         if (!asset) continue;
         const buffer = await this.getBuffer(asset);
         const source = context.createBufferSource();
@@ -62,9 +65,9 @@ export class AudioEngine {
         source.connect(graph.input);
         graph.output.connect(this.master as GainNode);
         const startsIn = Math.max(0, clip.start - from);
-        const offset = Math.min(buffer.duration, clip.offset + Math.max(0, from - clip.start));
+        const offset = Math.min(buffer.duration, take.offset + Math.max(0, from - clip.start));
         const available = Math.max(0, buffer.duration - offset);
-        const duration = Math.max(0, Math.min(clip.duration - Math.max(0, from - clip.start), available));
+        const duration = Math.max(0, Math.min(take.duration - Math.max(0, from - clip.start), available));
         if (duration <= 0.005) continue;
         const when = scheduleStart + startsIn;
         this.applyEnvelope(context, graph.gain, when, duration, clip.fadeIn, clip.fadeOut, track.volume);
